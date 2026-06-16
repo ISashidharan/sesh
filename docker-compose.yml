@@ -1,0 +1,26 @@
+# Isolated dev Postgres for sesh.
+# Mapped to host port 5544 — this machine has a native Postgres squatting on
+# both 5432 and 5433, so we use a clearly free port to avoid the clash.
+# Connection string (see apps/api/.env.example):
+#   postgresql://sesh:sesh@localhost:5544/sesh
+services:
+  db:
+    image: postgres:16
+    container_name: sesh-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sesh
+      POSTGRES_PASSWORD: sesh
+      POSTGRES_DB: sesh
+    ports:
+      - "5544:5432"
+    volumes:
+      - sesh_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sesh -d sesh"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  sesh_pgdata:

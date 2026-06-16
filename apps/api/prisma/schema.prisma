@@ -1,0 +1,167 @@
+// sesh — multi-tenant calendar scheduling.
+// Every tenant-owned row carries tenantId; services scope all queries by it,
+// and Postgres RLS (added in a later migration) is the backstop.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  owner
+  admin
+  staff
+}
+
+enum SeshStatus {
+  booked
+  cancelled
+  completed
+}
+
+enum ExceptionType {
+  closed
+  custom
+}
+
+model Tenant {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  timezone  String   @default("UTC")
+  branding  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users     User[]
+  calendars Calendar[]
+  seshTypes SeshType[]
+  customers Customer[]
+  seshes    Sesh[]
+}
+
+model User {
+  id          String   @id @default(cuid())
+  tenantId    String
+  clerkUserId String   @unique
+  email       String
+  role        Role     @default(staff)
+  createdAt   DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+model Calendar {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  timezone  String   @default("UTC")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant       Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workingHours WorkingHours[]
+  exceptions   AvailabilityException[]
+  seshes       Sesh[]
+
+  @@index([tenantId])
+}
+
+/// Recurring weekly availability. Times are minutes-from-midnight in the
+/// calendar's timezone. Multiple rows per weekday allow split shifts.
+model WorkingHours {
+  id         String @id @default(cuid())
+  calendarId String
+  weekday    Int // 0 = Sunday … 6 = Saturday
+  startMin   Int
+  endMin     Int
+
+  calendar Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  @@index([calendarId])
+}
+
+/// One-off overrides: a full closure or custom hours for a specific date.
+model AvailabilityException {
+  id         String        @id @default(cuid())
+  calendarId String
+  date       DateTime      @db.Date
+  type       ExceptionType
+  startMin   Int?
+  endMin     Int?
+
+  calendar Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  @@unique([calendarId, date])
+  @@index([calendarId, date])
+}
+
+model SeshType {
+  id              String   @id @default(cuid())
+  tenantId        String
+  name            String
+  durationMin     Int
+  bufferBeforeMin Int      @default(0)
+  bufferAfterMin  Int      @default(0)
+  priceCents      Int?
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  seshes Sesh[]
+
+  @@index([tenantId])
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  tenantId  String
+  email     String
+  name      String?
+  phone     String?
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  seshes Sesh[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model Sesh {
+  id         String     @id @default(cuid())
+  tenantId   String
+  calendarId String
+  seshTypeId String
+  customerId String
+  // The appointment itself.
+  startsAt   DateTime
+  endsAt     DateTime
+  // The occupied window including buffers (startsAt - bufferBefore .. endsAt +
+  // bufferAfter), snapshotted at booking time. All conflict checks use these so
+  // buffers are enforced regardless of later sesh-type edits.
+  blockStartsAt DateTime
+  blockEndsAt   DateTime
+  status     SeshStatus @default(booked)
+  notes      String?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  calendar Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  seshType SeshType @relation(fields: [seshTypeId], references: [id])
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([tenantId])
+  @@index([calendarId, startsAt])
+  @@index([calendarId, status, blockStartsAt, blockEndsAt])
+  @@index([customerId])
+}
