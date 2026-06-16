@@ -28,6 +28,10 @@ enum ExceptionType {
   custom
 }
 
+enum CalendarProviderKind {
+  google
+}
+
 model Tenant {
   id        String   @id @default(cuid())
   slug      String   @unique
@@ -37,11 +41,12 @@ model Tenant {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users     User[]
-  calendars Calendar[]
-  seshTypes SeshType[]
-  customers Customer[]
-  seshes    Sesh[]
+  users               User[]
+  calendars           Calendar[]
+  seshTypes           SeshType[]
+  customers           Customer[]
+  seshes              Sesh[]
+  calendarConnections CalendarConnection[]
 }
 
 model User {
@@ -66,10 +71,11 @@ model Calendar {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant       Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  workingHours WorkingHours[]
-  exceptions   AvailabilityException[]
-  seshes       Sesh[]
+  tenant             Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workingHours       WorkingHours[]
+  exceptions         AvailabilityException[]
+  seshes             Sesh[]
+  calendarConnection CalendarConnection?
 
   @@index([tenantId])
 }
@@ -148,12 +154,14 @@ model Sesh {
   // The occupied window including buffers (startsAt - bufferBefore .. endsAt +
   // bufferAfter), snapshotted at booking time. All conflict checks use these so
   // buffers are enforced regardless of later sesh-type edits.
-  blockStartsAt DateTime
-  blockEndsAt   DateTime
-  status     SeshStatus @default(booked)
-  notes      String?
-  createdAt  DateTime   @default(now())
-  updatedAt  DateTime   @updatedAt
+  blockStartsAt   DateTime
+  blockEndsAt     DateTime
+  status          SeshStatus @default(booked)
+  notes           String?
+  emailVerified   Boolean    @default(false)
+  externalEventId String?    // Google Calendar event id; null when no calendar sync
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
 
   tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   calendar Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
@@ -164,4 +172,25 @@ model Sesh {
   @@index([calendarId, startsAt])
   @@index([calendarId, status, blockStartsAt, blockEndsAt])
   @@index([customerId])
+}
+
+/// OAuth tokens linking a sesh Calendar to a Google Calendar account.
+/// One connection per sesh calendar (enforced by @unique on calendarId).
+model CalendarConnection {
+  id                 String               @id @default(cuid())
+  tenantId           String
+  calendarId         String               @unique
+  provider           CalendarProviderKind
+  externalCalendarId String               // Google calendar id, e.g. "primary"
+  accessToken        String
+  refreshToken       String
+  tokenExpiresAt     DateTime
+  syncEnabled        Boolean              @default(true)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  calendar Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
 }

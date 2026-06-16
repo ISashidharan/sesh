@@ -1,9 +1,82 @@
+import {
+  useState,
+  useEffect,
+  useContext,
+  createContext,
+} from "react";
 import type {
   ButtonHTMLAttributes,
   InputHTMLAttributes,
   ReactNode,
   SelectHTMLAttributes,
 } from "react";
+
+// ---- Toast system -----------------------------------------------------------
+
+type ToastType = "success" | "error";
+interface Toast { id: number; message: string; type: ToastType; }
+
+export const ToastContext = createContext<{
+  addToast: (message: string, type?: ToastType) => void;
+}>({ addToast: () => {} });
+
+export function ToastProvider({ children }: { children: ReactNode }) {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  function addToast(message: string, type: ToastType = "success") {
+    const id = Date.now();
+    setToasts((prev) => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 3000);
+  }
+
+  function dismiss(id: number) {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }
+
+  return (
+    <ToastContext.Provider value={{ addToast }}>
+      {children}
+      <div className="fixed top-4 right-4 z-50 flex flex-col gap-2">
+        {toasts.map((t) => (
+          <ToastItem key={t.id} toast={t} onDismiss={() => dismiss(t.id)} />
+        ))}
+      </div>
+    </ToastContext.Provider>
+  );
+}
+
+function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    // Trigger slide-in on mount
+    const id = requestAnimationFrame(() => setVisible(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  const bg = toast.type === "success" ? "bg-green-600" : "bg-red-700";
+
+  return (
+    <div
+      className={`${bg} text-white rounded-lg px-4 py-3 text-sm font-medium shadow-lg flex items-center gap-3 transition-all duration-300 ${visible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2"}`}
+    >
+      <span className="flex-1">{toast.message}</span>
+      <button
+        onClick={onDismiss}
+        className="ml-2 text-white/80 hover:text-white text-base leading-none"
+        aria-label="Dismiss"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+export function useToast() {
+  return useContext(ToastContext);
+}
 
 type Variant = "primary" | "secondary" | "danger" | "ghost";
 

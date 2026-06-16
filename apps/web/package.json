@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@clerk/clerk-react": "^5.61.3",
     "@sesh/shared": "*",
     "@tanstack/react-query": "^5.62.7",
     "react": "^19.0.0",

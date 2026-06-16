@@ -6,12 +6,13 @@ import { forbidden, unauthorized } from "./errors.js";
 import { prisma } from "./prisma.js";
 
 /**
- * Resolve the Clerk user id for a request.
+ * Resolve the Clerk user id for a request, without requiring the user to be
+ * provisioned in a tenant yet (onboarding relies on this).
  *
  * - Dev auth: trust the `x-dev-clerk-user` header (local development only).
  * - Production: verify the Bearer token with Clerk's backend SDK.
  */
-async function resolveClerkUserId(req: FastifyRequest): Promise<string> {
+export async function resolveClerkUserId(req: FastifyRequest): Promise<string> {
   if (env.DEV_AUTH) {
     const devUser = req.headers["x-dev-clerk-user"];
     if (typeof devUser !== "string" || devUser.length === 0) {

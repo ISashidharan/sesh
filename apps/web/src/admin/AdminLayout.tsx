@@ -1,4 +1,11 @@
+import {
+  RedirectToSignIn,
+  SignedIn,
+  SignedOut,
+  UserButton,
+} from "@clerk/clerk-react";
 import { NavLink, Outlet } from "react-router-dom";
+import { CLERK_ENABLED } from "../lib/clerk";
 
 const NAV = [
   { to: "/calendars", label: "Calendars" },
@@ -6,7 +13,7 @@ const NAV = [
   { to: "/seshes", label: "Bookings" },
 ];
 
-export function AdminLayout() {
+function Shell() {
   return (
     <div className="min-h-screen">
       <header className="border-b border-slate-200 bg-white">
@@ -33,12 +40,33 @@ export function AdminLayout() {
               ))}
             </nav>
           </div>
-          <span className="text-xs text-slate-400">Acme Studio · dev</span>
+          {CLERK_ENABLED ? (
+            <UserButton afterSignOutUrl="/" />
+          ) : (
+            <span className="text-xs text-slate-400">dev auth</span>
+          )}
         </div>
       </header>
       <main className="mx-auto max-w-5xl px-6 py-8">
         <Outlet />
       </main>
     </div>
+  );
+}
+
+export function AdminLayout() {
+  // Dev-auth mode: no Clerk context, render the admin shell directly.
+  if (!CLERK_ENABLED) return <Shell />;
+
+  // Clerk mode: require a signed-in session for the admin app.
+  return (
+    <>
+      <SignedIn>
+        <Shell />
+      </SignedIn>
+      <SignedOut>
+        <RedirectToSignIn />
+      </SignedOut>
+    </>
   );
 }

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>sesh widget — embed demo</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 680px;
+        margin: 0 auto;
+        padding: 48px 16px;
+        color: #0f172a;
+        background: #fff;
+      }
+      .note {
+        font-size: 14px;
+        color: #64748b;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 12px 14px;
+      }
+      code {
+        font-family: ui-monospace, monospace;
+        background: #f1f5f9;
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Acme Co.</h1>
+    <p>This page simulates a customer's own website embedding the sesh booking form.</p>
+    <p class="note">
+      The form below is the live <code>&lt;sesh-booking slug="acme"&gt;</code>
+      widget, mounted from <code>/widget.js</code>. It auto-resizes to its content.
+    </p>
+
+    <sesh-booking slug="acme"></sesh-booking>
+
+    <script src="/widget.js" async></script>
+  </body>
+</html>

@@ -5,8 +5,10 @@ import type {
   RescheduleSeshInput,
 } from "@sesh/shared";
 import { DateTime } from "luxon";
+import type { EventDetails } from "../lib/calendar-provider.js";
 import { badRequest, conflict, notFound } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
+import { getProviderForCalendar } from "./calendar-connection.service.js";
 import { assertWithinWorkingHours } from "./availability.service.js";
 import { getCalendar } from "./calendar.service.js";
 import { getSeshType } from "./sesh-type.service.js";
@@ -14,6 +16,8 @@ import { getSeshType } from "./sesh-type.service.js";
 interface BookingOptions {
   /** End-user bookings must be in the future; admins may backfill. */
   enforceFuture?: boolean;
+  /** Admin-created bookings are auto-verified; public bookings require email confirmation. */
+  emailVerified?: boolean;
 }
 
 /** The occupied window for a sesh = appointment expanded by its buffers. */
@@ -55,7 +59,7 @@ async function ensureNoClash(
 export async function createSesh(
   tenantId: string,
   input: CreateBookingInput,
-  { enforceFuture = true }: BookingOptions = {},
+  { enforceFuture = true, emailVerified = false }: BookingOptions = {},
 ) {
   const calendar = await getCalendar(tenantId, input.calendarId);
   const seshType = await getSeshType(tenantId, input.seshTypeId);
@@ -78,7 +82,7 @@ export async function createSesh(
   );
 
   // Serializable so two racing bookings for the last slot can't both succeed.
-  return prisma.$transaction(
+  const sesh = await prisma.$transaction(
     async (tx) => {
       await ensureNoClash(tx, {
         calendarId: input.calendarId,
@@ -111,12 +115,20 @@ export async function createSesh(
           blockStartsAt: blockStart.toJSDate(),
           blockEndsAt: blockEnd.toJSDate(),
           notes: input.notes ?? null,
+          emailVerified,
         },
-        include: { customer: true, seshType: true },
+        include: { customer: true, seshType: true, calendar: { select: { id: true, name: true } } },
       });
     },
     { isolationLevel: "Serializable" },
   );
+
+  // Push to Google Calendar. Non-fatal: a sync failure must not roll back the booking.
+  void pushCreateEvent(sesh, calendar, seshType).catch((err) =>
+    console.error("[booking] Google Calendar create failed:", err),
+  );
+
+  return sesh;
 }
 
 export function listSeshes(tenantId: string, q: ListSeshesQuery) {
@@ -147,19 +159,32 @@ export function listSeshes(tenantId: string, q: ListSeshesQuery) {
 export async function getSesh(tenantId: string, id: string) {
   const sesh = await prisma.sesh.findFirst({
     where: { id, tenantId },
-    include: { customer: true, seshType: true },
+    include: { customer: true, seshType: true, calendar: { select: { id: true, name: true } } },
   });
   if (!sesh) throw notFound("Sesh not found");
   return sesh;
 }
 
 export async function cancelSesh(tenantId: string, id: string) {
-  await getSesh(tenantId, id);
-  return prisma.sesh.update({
+  const sesh = await prisma.sesh.findFirst({
+    where: { id, tenantId },
+    include: { customer: true, seshType: true, calendar: { select: { id: true, name: true } } },
+  });
+  if (!sesh) throw notFound("Sesh not found");
+
+  const updated = await prisma.sesh.update({
     where: { id },
     data: { status: "cancelled" },
-    include: { customer: true, seshType: true },
+    include: { customer: true, seshType: true, calendar: { select: { id: true, name: true } } },
   });
+
+  if (sesh.externalEventId) {
+    void pushDeleteEvent(sesh.calendarId, sesh.externalEventId).catch((err) =>
+      console.error("[booking] Google Calendar delete failed:", err),
+    );
+  }
+
+  return updated;
 }
 
 export async function rescheduleSesh(
@@ -193,7 +218,7 @@ export async function rescheduleSesh(
     sesh.seshType.bufferAfterMin,
   );
 
-  return prisma.$transaction(
+  const rescheduled = await prisma.$transaction(
     async (tx) => {
       await ensureNoClash(tx, {
         calendarId: sesh.calendarId,
@@ -209,9 +234,116 @@ export async function rescheduleSesh(
           blockStartsAt: blockStart.toJSDate(),
           blockEndsAt: blockEnd.toJSDate(),
         },
-        include: { customer: true, seshType: true },
+        include: { customer: true, seshType: true, calendar: { select: { id: true, name: true } } },
       });
     },
     { isolationLevel: "Serializable" },
   );
+
+  if (sesh.externalEventId) {
+    const eventDetails = buildEventDetails(rescheduled, sesh.calendar);
+    void pushUpdateEvent(
+      sesh.calendarId,
+      sesh.externalEventId,
+      eventDetails,
+    ).catch((err) =>
+      console.error("[booking] Google Calendar update failed:", err),
+    );
+  }
+
+  return rescheduled;
+}
+
+export async function verifySesh(tenantId: string, id: string) {
+  await getSesh(tenantId, id);
+  return prisma.sesh.update({
+    where: { id },
+    data: { emailVerified: true },
+    include: { customer: true, seshType: true, calendar: { select: { id: true, name: true } } },
+  });
+}
+
+// ---- Google Calendar push helpers ------------------------------------------
+
+type SeshWithIncludes = {
+  id: string;
+  calendarId: string;
+  startsAt: Date;
+  endsAt: Date;
+  notes: string | null;
+  customer: { email: string; name: string | null };
+  seshType: { name: string };
+};
+
+function buildEventDetails(
+  sesh: SeshWithIncludes,
+  calendar: { timezone: string },
+): EventDetails {
+  return {
+    summary: sesh.seshType.name,
+    description: sesh.notes ?? undefined,
+    startISO: sesh.startsAt.toISOString(),
+    endISO: sesh.endsAt.toISOString(),
+    timezone: calendar.timezone,
+    attendeeEmail: sesh.customer.email,
+    attendeeName: sesh.customer.name ?? undefined,
+  };
+}
+
+async function pushCreateEvent(
+  sesh: SeshWithIncludes,
+  calendar: { id: string; timezone: string },
+  _seshType: { name: string },
+) {
+  const provider = await getProviderForCalendar(calendar.id);
+  if (!provider) return;
+
+  const conn = await import("../lib/prisma.js").then(({ prisma: p }) =>
+    p.calendarConnection.findUnique({
+      where: { calendarId: calendar.id },
+      select: { externalCalendarId: true },
+    }),
+  );
+  if (!conn) return;
+
+  const externalEventId = await provider.createEvent(
+    conn.externalCalendarId,
+    buildEventDetails(sesh, calendar),
+  );
+
+  await import("../lib/prisma.js").then(({ prisma: p }) =>
+    p.sesh.update({ where: { id: sesh.id }, data: { externalEventId } }),
+  );
+}
+
+async function pushUpdateEvent(
+  calendarId: string,
+  externalEventId: string,
+  eventDetails: EventDetails,
+) {
+  const provider = await getProviderForCalendar(calendarId);
+  if (!provider) return;
+
+  const { prisma: p } = await import("../lib/prisma.js");
+  const conn = await p.calendarConnection.findUnique({
+    where: { calendarId },
+    select: { externalCalendarId: true },
+  });
+  if (!conn) return;
+
+  await provider.updateEvent(conn.externalCalendarId, externalEventId, eventDetails);
+}
+
+async function pushDeleteEvent(calendarId: string, externalEventId: string) {
+  const provider = await getProviderForCalendar(calendarId);
+  if (!provider) return;
+
+  const { prisma: p } = await import("../lib/prisma.js");
+  const conn = await p.calendarConnection.findUnique({
+    where: { calendarId },
+    select: { externalCalendarId: true },
+  });
+  if (!conn) return;
+
+  await provider.deleteEvent(conn.externalCalendarId, externalEventId);
 }

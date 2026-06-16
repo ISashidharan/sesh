@@ -9,9 +9,20 @@ import type {
 
 const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
 
-// Dev auth: the API runs with DEV_AUTH=true and trusts this header. When Clerk
-// is wired up, replace this with an Authorization: Bearer <token> header.
+// Dev auth fallback: when Clerk isn't configured (no token getter registered),
+// the API runs with DEV_AUTH=true and trusts this header instead.
 const DEV_CLERK_USER = "dev_owner";
+
+// Bridge from React (Clerk's useAuth) into this plain module. When Clerk is
+// enabled, the app registers a getter here that returns the current session
+// token; authenticated requests then send `Authorization: Bearer <token>`.
+let getSessionToken: (() => Promise<string | null>) | null = null;
+
+export function setAuthTokenGetter(
+  getter: (() => Promise<string | null>) | null,
+): void {
+  getSessionToken = getter;
+}
 
 // ---- Response shapes (mirror the API) -------------------------------------
 
@@ -53,6 +64,7 @@ export interface Sesh {
   endsAt: string;
   status: "booked" | "cancelled" | "completed";
   notes: string | null;
+  emailVerified: boolean;
   customer: { email: string; name: string | null; phone: string | null };
   seshType: { name: string; durationMin: number };
   calendar?: { id: string; name: string };
@@ -61,6 +73,22 @@ export interface Sesh {
 export interface Slot {
   startsAt: string;
   endsAt: string;
+}
+
+export interface CalendarConnection {
+  id: string;
+  calendarId: string;
+  provider: "google";
+  externalCalendarId: string;
+  syncEnabled: boolean;
+  createdAt: string;
+  calendar: { name: string };
+}
+
+export interface ExternalCalendar {
+  id: string;
+  summary: string;
+  primary: boolean;
 }
 
 // ---- Core fetch -----------------------------------------------------------
@@ -74,7 +102,17 @@ interface RequestOptions {
 async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = {};
   if (opts.body !== undefined) headers["content-type"] = "application/json";
-  if (opts.auth) headers["x-dev-clerk-user"] = DEV_CLERK_USER;
+  if (opts.auth) {
+    const token = getSessionToken ? await getSessionToken() : null;
+    if (token) {
+      headers["authorization"] = `Bearer ${token}`;
+    } else if (!getSessionToken) {
+      // No Clerk configured — fall back to the dev-auth header.
+      headers["x-dev-clerk-user"] = DEV_CLERK_USER;
+    }
+    // (Clerk configured but signed out → no auth header; API returns 401 and
+    // the UI redirects to sign-in.)
+  }
 
   const res = await fetch(`${BASE}${path}`, {
     method: opts.method ?? "GET",
@@ -149,6 +187,35 @@ export const api = {
     request<Sesh[]>(`/seshes?${qs(params)}`, { auth: true }),
   cancelSesh: (id: string) =>
     request<Sesh>(`/seshes/${id}/cancel`, { method: "POST", auth: true }),
+  rescheduleSesh: (id: string, body: { startsAt: string }) =>
+    request<Sesh>(`/seshes/${id}/reschedule`, { method: "PATCH", body, auth: true }),
+  verifySesh: (id: string) =>
+    request<Sesh>(`/seshes/${id}/verify`, { method: "POST", auth: true }),
+
+  // Admin — Google Calendar connections
+  listCalendarConnections: () =>
+    request<CalendarConnection[]>("/calendar-connections", { auth: true }),
+  getGoogleAuthUrl: (calendarId: string) =>
+    request<{ url: string }>(
+      `/calendar-connections/google/auth?calendarId=${calendarId}`,
+      { auth: true },
+    ),
+  listExternalCalendars: (calendarId: string) =>
+    request<{ calendars: ExternalCalendar[] }>(
+      `/calendar-connections/google/calendars?calendarId=${calendarId}`,
+      { auth: true },
+    ),
+  deleteCalendarConnection: (id: string) =>
+    request<void>(`/calendar-connections/${id}`, {
+      method: "DELETE",
+      auth: true,
+    }),
+  toggleCalendarSync: (id: string, syncEnabled: boolean) =>
+    request<CalendarConnection>(`/calendar-connections/${id}`, {
+      method: "PATCH",
+      body: { syncEnabled },
+      auth: true,
+    }),
 
   // Public (no auth) — by tenant slug
   publicCalendars: (slug: string) =>

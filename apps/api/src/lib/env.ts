@@ -17,6 +17,14 @@ const schema = z.object({
   // Auth. In dev we allow a header-based bypass so the API boots without Clerk.
   DEV_AUTH: boolFromString.default("false"),
   CLERK_SECRET_KEY: z.string().optional(),
+
+  // Google Calendar OAuth. Optional — calendar sync is disabled when unset.
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_REDIRECT_URI: z
+    .string()
+    .default("http://localhost:4000/calendar-connections/google/callback"),
+  APP_BASE_URL: z.string().default("http://localhost:5173"),
 });
 
 const parsed = schema.safeParse(process.env);

@@ -5,8 +5,10 @@ import type {
 } from "@prisma/client";
 import type { AvailabilityQuery, Slot } from "@sesh/shared";
 import { DateTime } from "luxon";
+import type { BusyInterval } from "../lib/calendar-provider.js";
 import { badRequest } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
+import { getProviderForCalendar } from "./calendar-connection.service.js";
 import { getCalendar } from "./calendar.service.js";
 import { getSeshType } from "./sesh-type.service.js";
 
@@ -85,7 +87,10 @@ export async function computeAvailability(
     throw badRequest(`Date range cannot exceed ${MAX_RANGE_DAYS} days`);
   }
 
-  const [workingHours, exceptions, seshes] = await Promise.all([
+  const rangeStart = from.toUTC();
+  const rangeEnd = to.plus({ days: 1 }).toUTC();
+
+  const [workingHours, exceptions, seshes, provider] = await Promise.all([
     prisma.workingHours.findMany({ where: { calendarId: calendar.id } }),
     prisma.availabilityException.findMany({
       where: {
@@ -97,12 +102,34 @@ export async function computeAvailability(
       where: {
         calendarId: calendar.id,
         status: "booked",
-        blockStartsAt: { lt: to.plus({ days: 1 }).toUTC().toJSDate() },
-        blockEndsAt: { gt: from.toUTC().toJSDate() },
+        blockStartsAt: { lt: rangeEnd.toJSDate() },
+        blockEndsAt: { gt: rangeStart.toJSDate() },
       },
       select: { blockStartsAt: true, blockEndsAt: true },
     }),
+    getProviderForCalendar(calendar.id),
   ]);
+
+  // Fetch external busy intervals (Google Calendar). Errors are non-fatal —
+  // we log and fall back to no external blocks rather than breaking availability.
+  let externalBusy: BusyInterval[] = [];
+  if (provider) {
+    try {
+      const conn = await prisma.calendarConnection.findUnique({
+        where: { calendarId: calendar.id },
+        select: { externalCalendarId: true },
+      });
+      if (conn) {
+        externalBusy = await provider.listBusy(
+          conn.externalCalendarId,
+          rangeStart,
+          rangeEnd,
+        );
+      }
+    } catch (err) {
+      console.error("[availability] Google busy-time fetch failed:", err);
+    }
+  }
 
   const now = DateTime.utc();
   const duration = seshType.durationMin;
@@ -130,12 +157,21 @@ export async function computeAvailability(
         // Compare blocked windows (both sides expanded by their buffers).
         const candStart = slotStart.minus({ minutes: seshType.bufferBeforeMin });
         const candEnd = slotEnd.plus({ minutes: seshType.bufferAfterMin });
-        const clash = seshes.some((s) => {
+
+        const internalClash = seshes.some((s) => {
           const bStart = DateTime.fromJSDate(s.blockStartsAt);
           const bEnd = DateTime.fromJSDate(s.blockEndsAt);
           return bStart < candEnd && bEnd > candStart;
         });
-        if (clash) continue;
+        if (internalClash) continue;
+
+        // Subtract external (Google Calendar) busy blocks — slot start/end only,
+        // no buffer expansion needed since external events already carry their
+        // own duration.
+        const externalClash = externalBusy.some(
+          (b) => b.start < slotEnd && b.end > slotStart,
+        );
+        if (externalClash) continue;
 
         slots.push({
           startsAt: isoOrThrow(slotStart),

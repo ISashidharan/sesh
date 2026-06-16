@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import type { Slot } from "../lib/api";
 import { api } from "../lib/api";
@@ -13,11 +13,36 @@ import {
   Select,
   Spinner,
 } from "../components/ui";
+import { DatePicker } from "../components/DatePicker";
 import { fmtDateTime, fmtPrice, fmtTime, todayISODate } from "../lib/time";
+
+// When mounted inside the embeddable widget's iframe (/book/:slug?embed=1),
+// report content height to the parent so the widget can auto-resize.
+const EMBEDDED =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).get("embed") === "1";
+
+function useEmbedAutoResize() {
+  useEffect(() => {
+    if (!EMBEDDED || window.parent === window) return;
+    // Measure the body, not documentElement: the latter is floored to the
+    // iframe viewport height, so it never reports a shrink.
+    const post = () =>
+      window.parent.postMessage(
+        { type: "sesh:resize", height: document.body.scrollHeight },
+        "*",
+      );
+    post();
+    const ro = new ResizeObserver(post);
+    ro.observe(document.body);
+    return () => ro.disconnect();
+  }, []);
+}
 
 export function BookingPage() {
   const { slug } = useParams();
   const tenantSlug = slug!;
+  useEmbedAutoResize();
 
   const calendars = useQuery({
     queryKey: ["pub-calendars", tenantSlug],
@@ -165,14 +190,13 @@ export function BookingPage() {
 
         <div className="mt-4">
           <Field label="Date">
-            <Input
-              type="date"
+            <DatePicker
               value={date}
-              min={todayISODate()}
-              onChange={(e) => {
-                setDate(e.target.value);
+              onChange={(d) => {
+                setDate(d);
                 setSlot(null);
               }}
+              min={todayISODate()}
             />
           </Field>
         </div>
@@ -193,10 +217,10 @@ export function BookingPage() {
                   <button
                     key={s.startsAt}
                     onClick={() => setSlot(s)}
-                    className={`rounded-lg border px-2 py-2 text-sm font-medium transition ${
+                    className={`rounded-full border px-3 py-2 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 ${
                       active
-                        ? "border-indigo-600 bg-indigo-600 text-white"
-                        : "border-slate-300 bg-white text-slate-700 hover:border-indigo-400"
+                        ? "border-indigo-600 bg-indigo-600 text-white shadow-sm"
+                        : "border-slate-200 bg-white text-slate-700 hover:border-indigo-400 hover:bg-indigo-50 hover:text-indigo-700"
                     }`}
                   >
                     {fmtTime(s.startsAt, tz)}
@@ -243,6 +267,16 @@ export function BookingPage() {
                   placeholder="you@example.com"
                 />
               </Field>
+              <Field label="Phone (optional)">
+                <Input
+                  type="tel"
+                  value={customer.phone}
+                  onChange={(e) =>
+                    setCustomer({ ...customer, phone: e.target.value })
+                  }
+                  placeholder="+1 (555) 000-0000"
+                />
+              </Field>
             </div>
             <div className="mt-4 flex items-center gap-3">
               <Button type="submit" disabled={book.isPending}>
@@ -269,8 +303,9 @@ export function BookingPage() {
 }
 
 function CenteredShell({ children }: { children: React.ReactNode }) {
+  // In embed mode, don't force 100vh — the iframe sizes to content instead.
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-12">
+    <div className={`bg-slate-50 px-4 py-12 ${EMBEDDED ? "" : "min-h-screen"}`}>
       <div className="mx-auto max-w-xl">{children}</div>
     </div>
   );

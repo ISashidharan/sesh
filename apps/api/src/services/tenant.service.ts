@@ -7,15 +7,16 @@ import { assertTimezone } from "../lib/time.js";
 /**
  * Create a tenant and its owner user in one transaction. This is the onboarding
  * entry point; the owner's Clerk user id is what subsequent auth resolves against.
+ *
+ * `ownerClerkUserId` is resolved by the route from the verified session (or the
+ * dev header) — never trusted from the request body, so a caller can't claim an
+ * arbitrary identity as the tenant owner.
  */
-export async function onboardTenant(input: OnboardTenantInput) {
+export async function onboardTenant(
+  input: OnboardTenantInput,
+  ownerClerkUserId: string,
+) {
   assertTimezone(input.timezone, badRequest);
-
-  const clerkUserId = input.ownerClerkUserId;
-  if (!clerkUserId) {
-    // In production this comes from the verified session, not the request body.
-    throw badRequest("ownerClerkUserId is required");
-  }
 
   const existing = await prisma.tenant.findUnique({
     where: { slug: input.slug },
@@ -30,7 +31,7 @@ export async function onboardTenant(input: OnboardTenantInput) {
       timezone: input.timezone,
       users: {
         create: {
-          clerkUserId,
+          clerkUserId: ownerClerkUserId,
           email: input.ownerEmail,
           role: Role.owner,
         },

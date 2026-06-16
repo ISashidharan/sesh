@@ -11,6 +11,7 @@ import {
   getSesh,
   listSeshes,
   rescheduleSesh,
+  verifySesh,
 } from "../services/booking.service.js";
 
 export async function seshRoutes(app: FastifyInstance): Promise<void> {
@@ -28,12 +29,12 @@ export async function seshRoutes(app: FastifyInstance): Promise<void> {
     return getSesh(tenantId, id);
   });
 
-  // Admin-created booking; admins may backfill past times.
+  // Admin-created booking; admins may backfill past times and are auto-verified.
   app.post("/seshes", async (req, reply) => {
     const { tenantId } = requireAuth(req);
     const input = createBookingSchema.parse(req.body);
     reply.code(201);
-    return createSesh(tenantId, input, { enforceFuture: false });
+    return createSesh(tenantId, input, { enforceFuture: false, emailVerified: true });
   });
 
   app.patch("/seshes/:id/reschedule", async (req) => {
@@ -47,5 +48,11 @@ export async function seshRoutes(app: FastifyInstance): Promise<void> {
     const { tenantId } = requireAuth(req);
     const { id } = req.params as { id: string };
     return cancelSesh(tenantId, id);
+  });
+
+  app.post("/seshes/:id/verify", async (req) => {
+    const { tenantId } = requireAuth(req);
+    const { id } = req.params as { id: string };
+    return verifySesh(tenantId, id);
   });
 }

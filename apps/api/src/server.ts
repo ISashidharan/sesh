@@ -6,6 +6,7 @@ import "./lib/context.js"; // registers Fastify request augmentation
 import { env } from "./lib/env.js";
 import { HttpError } from "./lib/errors.js";
 import { prisma } from "./lib/prisma.js";
+import { calendarConnectionRoutes } from "./modules/calendar-connections.js";
 import { calendarRoutes } from "./modules/calendars.js";
 import { healthRoutes } from "./modules/health.js";
 import { publicRoutes } from "./modules/public.js";
@@ -76,6 +77,7 @@ export function buildServer() {
   app.register(seshTypeRoutes);
   app.register(seshRoutes);
   app.register(publicRoutes);
+  app.register(calendarConnectionRoutes);
 
   return app;
 }
